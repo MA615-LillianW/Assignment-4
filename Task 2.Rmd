@@ -1,0 +1,227 @@
+---
+title: "Assignment4-Task 2"
+author: "Shicong Wang"
+date: "11/29/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning=F,message = F,echo=F,highlight=F)
+knitr::opts_chunk$set(fig.width=6, fig.height=4,fig.align = "center") 
+pacman::p_load(
+tidyverse,
+magrittr,
+knitr,
+gutenbergr,
+tidytext,
+sentimentr,
+tidyselect,
+stringr
+)
+
+```
+
+# Task ONE: Pick a book
+
+I choose the book <Tess of the d’Urbervilles>, whose author is Thomas Hardy.
+Here is tje book link: [Tess of the d’Urbervilles](https://www.gutenberg.org/ebooks/110)
+```{r}
+#devtools::install_github("Truenumbers/tnum/tnum")
+#install.packages("glue")
+library(tnum)
+#tnum.authorize("mssp1.bu.edu")
+#tnum.getDBPathList(taxonomy = "subject", levels=1)
+tnum.authorize("mssp1.bu.edu")
+tnum.setSpace("test2")
+Tess <- gutenberg_download(gutenberg_id = 110)  ## download Tess
+#source("Book2TN-v3 - hw.R")
+#tnBooksFromLines(Tess$text, "Thomas/Tess")
+#tnum.getDBPathList(taxonomy="subject", levels=2)
+```
+
+Firstly, it's necessary to tidy the book, which means we need to break the text into individual tokens (a process called tokenization) and transform it to a tidy data structure. Also, use mutate() to annotate a line number quantity to keep track of lines in the original format and a chapter (using a regex) to find where all the chapters are.
+Now that the data is in one-word-per-row format, we can manipulate it with tidy tools like dplyr. Often in text analysis, we will want to remove stop words; stop words are words that are not useful for an analysis, typically extremely common words such as “the”, “of”, “to”, and so forth in English. We can remove stop words (kept in the tidy text data set stop_words) with an anti_join().
+
+```{r}
+#  add line number and column
+Tess_2 <-read.table('Tess2.txt',header = T)
+original_books <- Tess_2 %>%
+  mutate(linenumber = row_number(),
+         chapter = cumsum(str_detect(text, 
+                                     regex("<",
+                                           ignore_case = TRUE)))) %>%
+  ungroup()
+t<- original_books$chapter %>% unique()
+
+# tidy book
+library(tidytext)
+tidy_books <- original_books %>%
+  unnest_tokens(word, text)
+ 
+# drop stop words
+data(stop_words)
+tidy_books <- tidy_books %>%
+  anti_join(stop_words)
+
+```
+
+# Task TWO: bag of words analysis
+
+## the frequency of the word
+
+Because we’ve been using tidy tools, our word counts are stored in a tidy data frame. This allows us to pipe this directly to the ggplot2 package, for example to create a visualization of the most common words.
+
+```{r echo=FALSE,fig.width=6, fig.height=4}
+library(ggplot2)
+# count words
+tidy_books2<- tidy_books %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 100) %>%
+  mutate(word = reorder(word, n))
+ggplot(tidy_books2,aes(n, word)) +
+  geom_col() +
+  labs(y = NULL)
+```
+
+## choose an index length and a sentiment dictionary
+
+Let’s address the topic of opinion mining or sentiment analysis. When human readers approach a text, we use our understanding of the emotional intent of words to infer whether a section of text is positive or negative, or perhaps characterized by some other more nuanced emotion like surprise or disgust. We can use the tools of text mining to approach the emotional content of text programmatically.
+
+There are a variety of methods and dictionaries that exist for evaluating the opinion or emotion in text. The tidytext package provides access to several sentiment lexicons. Three general-purpose lexicons are AFINN, bing, and nrc.
+
+```{r,fig.width=10, fig.height=8}
+#get_sentiments("afinn")
+#get_sentiments("bing")
+#get_sentiments("nrc")
+
+afinn <- tidy_books %>% 
+  inner_join(get_sentiments("afinn")) %>% 
+  group_by(index = linenumber %/% 80) %>% 
+  summarise(sentiment = sum(value)) %>% 
+  mutate(method = "AFINN")
+
+bing_and_nrc <- bind_rows(
+  tidy_books %>% 
+    inner_join(get_sentiments("bing")) %>%
+    mutate(method = "Bing et al."),
+  tidy_books %>% 
+    inner_join(get_sentiments("nrc") %>% 
+                 filter(sentiment %in% c("positive", 
+                                         "negative"))
+    ) %>%
+    mutate(method = "NRC")) %>%
+  count(method, index = linenumber %/% 80, sentiment) %>%
+  pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+bind_rows(afinn, 
+          bing_and_nrc) %>%
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+```
+
+We find similar differences between the methods when looking at other novels; the NRC sentiment is high, the AFINN sentiment has more variance, the Bing et al. sentiment appears to find longer stretches of similar text, but all three agree roughly on the overall trends in the sentiment through a narrative arc.
+
+# Most common positive and negative words
+
+One advantage of having the data frame with both sentiment and word is that we can analyze word counts that contribute to each sentiment. By implementing count() here with arguments of both word and sentiment, we find out how much each word contributed to each sentiment.
+
+This can be shown visually, and we can pipe straight into ggplot2, if we like, because of the way we are consistently using tools built for handling tidy data frames.
+
+## lexicon "nrc"
+```{r}
+nrc_word_counts <- tidy_books %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+nrc_word_counts %>%
+  group_by(sentiment) %>%
+  slice_max(n, n = 10) %>% 
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+```
+
+## lexicon "bing"
+```{r}
+bing_word_counts <- tidy_books %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  slice_max(n, n = 10) %>% 
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+```
+
+
+# word cloud
+
+Let’s do the sentiment analysis to tag positive and negative words using an inner join, then find the most common positive and negative words. Until the step where we need to send the data to comparison.cloud(), this can all be done with joins, piping, and dplyr because our data is in tidy format.
+
+```{r,fig.width=6, fig.height=4}
+library(reshape2)
+library(wordcloud)
+
+tidy_books %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("gray20", "gray80"),
+                   max.words = 100)
+
+```
+```{r,fig.width=6, fig.height=4}
+tidy_books %>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(title.size=2, colors = brewer.pal(10,name  ='RdBu'),match.colors=TRUE,
+                   max.words = 100,title.bg.colors="grey80")
+```
+
+The size of a word’s text is in proportion to its frequency within its sentiment, and the color of words represents different emotions. We can use this visualization to see the most important positive and negative words.
+
+## Extra Credits
+
+In this section, I choose a new lexicon named "loughran". This lexicon divided words into constraining, litigious, negative, positive, superfluous and uncertainty. As we need to compare positive and negative words, select positive and negative parts contained in the lexicon.
+
+```{r}
+#get_sentiments("loughran")
+loughran <- tidy_books %>% 
+    inner_join(get_sentiments("loughran") %>% 
+                 filter(sentiment %in% c("positive", 
+                                         "negative"))
+    ) %>%
+    mutate(method = "loughran") %>%
+    count(method, index = linenumber %/% 80, sentiment) %>%
+    pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+    mutate(sentiment = positive - negative)
+
+bind_rows(afinn, 
+          bing_and_nrc,loughran) %>%
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+```
+
+Since loughran was developed based on analyses of  of financial sentiment terms, and intentionally avoids words like “share” and “fool”, as well as subtler terms like “liability” and “risk” that may not have a negative meaning in a financial context. As a result, it may not be that suitable to this novel. However, if we need to make analysis in financial report in future, we can use this sentiment in a proper way.
+      
+
