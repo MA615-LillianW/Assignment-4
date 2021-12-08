@@ -1,0 +1,181 @@
+---
+title: "Assignment4-Task 3"
+author: "Shicong Wang"
+date: "12/7/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning=F,message = F,echo=F,highlight=F)
+knitr::opts_chunk$set(fig.width=6, fig.height=4,fig.align = "center") 
+pacman::p_load(
+tidyverse,
+magrittr,
+knitr,
+gutenbergr,
+tidytext,
+sentimentr,
+tidyselect,
+stringr
+)
+
+```
+
+## Task THREE: sentence-level analysis
+
+```{r}
+library(tnum)
+tnum.authorize("mssp1.bu.edu")
+tnum.setSpace("test2")
+```
+```{r}
+#  add line number and column
+Tess_2 <-read.table('Tess2.txt',header = T)
+original_books <- Tess_2 %>%
+  mutate(linenumber = row_number(),
+         chapter = cumsum(str_detect(text, 
+                                     regex("<",
+                                           ignore_case = TRUE)))) %>%
+  ungroup()
+t<- original_books$chapter %>% unique()
+
+# tidy book
+library(tidytext)
+tidy_books <- original_books %>%
+  unnest_tokens(word, text)
+ 
+# drop stop words
+data(stop_words)
+tidy_books <- tidy_books %>%
+  anti_join(stop_words)
+```
+
+Firstly, use the tunm ingester to load the reorder book into test2 number space.
+
+```{r}
+library(sentimentr)
+#df1<- tnum.query('Thomas/Tess/section# has text',max=7000) %>% tnum.objectsToDf()
+#Text<- write.table(Tess,'Tess.txt',row.names = F)
+Tess_new2 <-read.table('Tess2.txt',header = T)
+#tnBooksFromLines(Tess_new2$text, "Thomas/Tess_new2")
+```
+
+## sentence sentiment plot
+
+In order to start sentence analysis, we need to apart the novel into single sentence. The figure shows the sentence out plot.
+
+```{r,fig.width=6, fig.height=4}
+df2<- tnum.query('Thomas/Tess_new2# has text',max=7000) %>% tnum.objectsToDf()
+book_sentence<-df2 %>% separate(col=subject,
+                  into = c("path1", "path2","section","paragraph","sentence"), 
+                  sep = "/", 
+                  fill = "right") %>% 
+  select(section:string.value)
+#book_sentence$section<-str_extract_all(book_sentence$section,"\\d+") %>% unlist() %>% as.numeric()
+book_sentence<-book_sentence %>% mutate_at(c('section','paragraph','sentence'),~str_extract_all(.,"\\d+") %>% unlist() %>% as.numeric())
+sentence_out<-book_sentence %>% dplyr::mutate(sentence_split = get_sentences(string.value))%$%
+    sentiment_by(sentence_split, list(section))
+plot(sentence_out)
+```
+
+## comparity of two analysis
+Then it comes to comparity of two analysis. In this section, I select two analysis ways: sentimentr and bing, which seems that the bar plots are pretty similar.
+
+```{r,fig.width=10, fig.height=4}
+new_bing<-tidy_books %>% 
+    inner_join(get_sentiments("bing")) %>%
+    mutate(method = "Bing et al.") %>% 
+    count(method, index = chapter, sentiment) %>%
+  pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+new_bing2<-new_bing %>% mutate(bing_scale=scale(sentiment)) %>% select(method,index,bing_scale)
+colnames(new_bing2)[2]='section'
+sentence_out<-sentence_out %>% mutate(sentimentr_scale=scale(ave_sentiment))
+sentence_out_2method<-left_join(sentence_out,new_bing2,by='section')%>% select(section,bing_scale,sentimentr_scale)
+sentence_out_2method_plot<-sentence_out_2method %>% pivot_longer(cols=c('sentimentr_scale','bing_scale'),names_to = 'sentiment')
+sentence_out_2method_plot %>%ggplot(aes(y=value,x=factor(section))) +
+  geom_bar(aes(fill=factor(sentiment)),stat='identity',position = "dodge",width = 0.7)+theme_bw()
+```
+
+# EXTRA CREDIT: character analysis
+
+The two main character in the book <Tess of the d’Urbervilles> are "tess" and "clare". Tess and Angel Clare are the hero and heroine of the story.Since the story is basically developed from the perspective of the heroine, the frequency of words containing tess will be higher.
+
+Here are truenumbers for the number of times each character appears in each chapter and the number of times both characters appear in the same paragraphs. And here shows the results:
+
+|Section              |tess       |clare    |
+|:---:                |:---:      |:---:    |
+|1                    |0          |0        |
+|2                    |8          |0        |
+|3                    |22         |0        |
+|4                    |35         |1        |
+|5                    |27         |0        |
+|6                    |21         |0        |
+|7                    |23         |1        |
+|8                    |0          |0        |
+|9                    |17         |0        |
+|10                   |19         |0        |
+
+|Section              |paragraph       |both_appear    |
+|:---:                |:---:           |:---:    |
+|4                    |43              |1        |
+|7                    |8               |1        |
+|24                   |47              |1        |
+|25                   |38              |1        |
+|26                   |38              |1        |
+|26                   |54              |1        |
+|26                   |56              |1        |
+|27                   |3               |1        |
+|27                   |5               |1        |
+|27                   |6               |1        |
+```{r}
+book_sentence_indi<-book_sentence %>% mutate(tess=str_match(book_sentence$string.value,regex('([Tt]ess)'))[,1],
+                         clare=str_match(book_sentence$string.value,regex('([Cc]lare)'))[,1])
+score<-book_sentence_indi %>% dplyr::mutate(sentence_split = get_sentences(string.value))%$%
+    sentiment_by(sentence_split) %>% `$`(ave_sentiment)
+book_sentence_indi$score<-score
+re<-book_sentence_indi %>% group_by(section) %>% summarise(tess=sum(tess %>% is.na() %>% `!`()),
+                                                       clare=sum(clare%>% is.na() %>% `!`()))
+#knitr::kable(re,'simple')
+re2<-book_sentence_indi %>% group_by(section,paragraph) %>% summarise(
+  both_appear=sum(tess %>% is.na() %>% `!`() & clare%>% is.na() %>% `!`() ))
+re3<- re2 %>% filter(both_appear >0)
+
+colors<- c("tess"="#FF6666", "clare"="#69b3a2")
+p<- ggplot(data=re,aes(x=section)) + 
+  geom_point(aes(y = tess),shape=19, color="black", fill="black", size=1) +
+  geom_point(aes(y = clare),shape=21, color="black", fill="black", size=1) +
+  geom_line(aes(y = tess, color = "tess"),size=1) + 
+  geom_line(aes(y = clare, color="clare"), linetype="twodash",size=1)+
+  scale_color_manual(values=colors)+
+  xlab("section")+
+  ylab("word frenquncy")
+p
+
+
+re3 %>% ggplot(aes(section,both_appear),color="#69b3a2") +
+  geom_col(show.legend = FALSE) +
+  labs(x = "section",
+       y = "word appearance")
+```
+
+In the early days of the novel, the plot development between the hero and heroine was not much. Tess was forced to meet with Alec, who was a son of a wealthy businessman, used his father’s money and power in the countryside to show off. The first time he saw Tess, his dissolute face was completely unmasked lewd. “What a funny thing! And what a crumby girl!” He set a trap to defile Tess and destroyed Tess about her lifetime of happiness. In the 20-40 part, the word frequency curve between Tess and  Clare becomes higher, which means that in this part of the novel, there are more interactions between the male and female protagonists.When Clare saw Tess who was so industrious, his heart was beat. They really shared joyful time together, fell in deep love with each other. Combined with the sentiment plot in task 2, it contains more positive words. However, Clare's love rather ideally and fancifully than with the impassioned thoroughness of her feeling for him. He could love desperately, but with a love more especially inclined to the imaginative and ethereal. So when Tess honestly confessed to him her own past insults, then the Claire’s idol would be collapsed. So they separated and Clare went to Brazil alone. The word frequency of both of them dropped in this part.
+In the last part, Clare felt remorse and went back  to find Tess, so their word frequency began to have a consistent trend again.
+
+Here shows the test2 number space, and "Thomas/Tess" ban be seen in it.
+```{r}
+tnum.getDBPathList(taxonomy="subject", levels=2)
+q1<-tnum.query(query="Thomas/Tess# has *",max=100000)
+df11 <- tnum.objectsToDf(q1)
+df11 %>% view()
+q2<- tnum.query('Thomas/Tess/heading# has *',max=60)
+df21 <- tnum.objectsToDf(q2)
+df21 %>% view()
+q3<- tnum.query('Thomas/Tess# has text',max=6000)
+df31 <- tnum.objectsToDf(q3)
+df31 %>% view()
+```
+      
